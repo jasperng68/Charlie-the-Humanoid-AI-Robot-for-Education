@@ -1,0 +1,358 @@
+from openai import OpenAI
+import asyncio
+import websockets
+import json
+import base64
+import pyaudio
+import os
+import subprocess
+import time
+import threading
+import random
+import numpy as np
+from scipy.signal import resample_poly
+
+from motion_engine1 import play_sequence, wave_left, go_home, shutdown_motors
+
+API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(timeout=60.0)
+
+URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime-mini"
+
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+
+INPUT_RATE = 16000
+OUTPUT_RATE = 24000
+CHANNELS = 1
+
+INPUT_DEVICE_INDEX = 1
+OUTPUT_DEVICE_INDEX = 6
+
+VOICE = "echo"
+AUDIO_DEVICE = "pulse"
+
+robot_awake = True
+
+GESTURES = (
+    ["thinking", "listening"] +
+    [f"right_gesture{i}" for i in range(1, 13)] +
+    [f"left_gesture{i}" for i in range(1, 13)] +
+    ["both_open", "both_open_wide", "both_up_small"]
+)
+
+qa_gesture_stop = None
+qa_gesture_thread = None
+
+
+def set_face_state(state):
+    with open("face_state.txt", "w") as f:
+        f.write(state)
+
+
+def gesture_loop(stop_event, min_wait=0.15, max_wait=0.45):
+    """
+    Continuous autonomous gestures.
+    It does NOT go home after every gesture.
+    It moves from one gesture directly to another.
+    Home is called once when speech/answer finishes.
+    """
+    while not stop_event.is_set():
+        gesture = random.choice(GESTURES)
+        print("Gesture:", gesture)
+
+        play_sequence([
+            (gesture, random.uniform(0.45, 0.75))
+        ], speed=120, release=False)
+
+        time.sleep(random.uniform(min_wait, max_wait))
+
+
+def start_qa_gestures():
+    global qa_gesture_stop, qa_gesture_thread
+
+    if qa_gesture_thread and qa_gesture_thread.is_alive():
+        return
+
+    qa_gesture_stop = threading.Event()
+
+    qa_gesture_thread = threading.Thread(
+        target=gesture_loop,
+        args=(qa_gesture_stop,),
+        daemon=True
+    )
+
+    qa_gesture_thread.start()
+
+
+def stop_qa_gestures():
+    global qa_gesture_stop, qa_gesture_thread
+
+    if qa_gesture_stop:
+        qa_gesture_stop.set()
+
+    if qa_gesture_thread and qa_gesture_thread.is_alive():
+        qa_gesture_thread.join()
+
+    qa_gesture_stop = None
+    qa_gesture_thread = None
+
+    go_home()
+
+
+def robot_say(text, gesture=True):
+    print("Charlie:", text)
+
+    speech = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice=VOICE,
+        input=text,
+        response_format="wav"
+    )
+
+    speech.write_to_file("lesson_reply.wav")
+
+    stop_event = threading.Event()
+    gesture_thread = None
+
+    if gesture:
+        gesture_thread = threading.Thread(
+            target=gesture_loop,
+            args=(stop_event,),
+            daemon=True
+        )
+        gesture_thread.start()
+
+    set_face_state("talking")
+
+    player = subprocess.Popen([
+        "aplay",
+        "-D",
+        AUDIO_DEVICE,
+        "lesson_reply.wav"
+    ])
+
+    player.wait()
+    set_face_state("idle")
+
+    if gesture:
+        stop_event.set()
+        gesture_thread.join()
+
+    go_home()
+
+
+def say_with_motion(text, motion=None):
+    motion_thread = None
+
+    if motion:
+        motion_thread = threading.Thread(target=motion)
+        motion_thread.start()
+
+    robot_say(text, gesture=False)
+
+    if motion_thread:
+        motion_thread.join()
+
+    go_home()
+
+
+def teach_lesson():
+    say_with_motion(
+        "Hello everyone! I am Charlie, your robot teacher!",
+        wave_left
+    )
+
+    robot_say("Today, we are going to learn about something very tiny but very important â cells.")
+
+    robot_say("A cell is the basic unit of life. That means every living thing, including humans, animals, and plants, is made up of one or more cells. You can think of cells as tiny building blocks that make up the body.")
+
+    robot_say("Today, we will learn what a cell is, what cell structure means, the types of cells, and some important parts inside a cell called organelles.")
+
+    robot_say("So first, what is a cell? As I mentioned earlier, a cell is the basic unit of life. Every living being is made up of cells. For example, the human body has about 30 to 37 trillion cells in total.")
+
+    robot_say("Next, we will study cell structure. Cell structure means how the different parts inside a cell are arranged. These parts are called organelles. Each organelle has a special job that helps the cell stay alive and work properly.")
+
+    robot_say("There are two main types of cells: prokaryotic cells and eukaryotic cells. Prokaryotic cells are simple cells. Bacteria are examples. They do not have a nucleus.")
+
+    robot_say("Eukaryotic cells are more complex. They are found in plants, animals, fungi, and protists. They have a proper nucleus and membrane-bound organelles.")
+
+    robot_say("Now, letâs explore the main organelles in a eukaryotic cell.")
+
+    robot_say("First is the nucleus. The nucleus is like the control centre of the cell. Inside it, there is DNA. DNA gives instructions to the cell.")
+
+    robot_say("Next is the cell membrane. It is a thin outer boundary around the cell. It protects the cell and controls what enters and leaves.")
+
+    robot_say("Now, we have the cytoplasm. Cytoplasm is a jelly-like fluid inside the cell. It fills the cell and holds the organelles.")
+
+    robot_say("Next, we have the mitochondria. They are called the powerhouse of the cell because they release energy from food.")
+
+    robot_say("Then, we have lysosomes. Lysosomes are like the cleaning team of the cell. They break down waste and damaged parts.")
+
+    robot_say("Next is the Golgi apparatus. It is like the packaging and delivery system of the cell.")
+
+    robot_say("Now, letâs talk about ribosomes. Ribosomes are tiny structures that make proteins.")
+
+    robot_say("Finally, we have the endoplasmic reticulum, also called ER. Rough ER helps make proteins. Smooth ER helps make lipids and removes harmful substances.")
+
+    robot_say("So, letâs quickly review! Cells are the basic units of life. Prokaryotic cells do not have a nucleus. Eukaryotic cells have a nucleus and organelles.")
+
+    robot_say("The nucleus controls the cell. The cell membrane protects it. Cytoplasm holds everything inside. Mitochondria make energy. Lysosomes clean waste. Golgi packages materials. Ribosomes make proteins. ER helps make and transport materials.")
+
+    robot_say("Great job learning with me today! Now, do you have any questions?")
+
+
+async def send_audio(ws, stream_in):
+    while True:
+        audio = stream_in.read(CHUNK, exception_on_overflow=False)
+        samples = np.frombuffer(audio, dtype=np.int16)
+        samples_24k = resample_poly(samples, 3, 2).astype(np.int16)
+
+        encoded = base64.b64encode(samples_24k.tobytes()).decode("utf-8")
+
+        await ws.send(json.dumps({
+            "type": "input_audio_buffer.append",
+            "audio": encoded
+        }))
+
+        await asyncio.sleep(0.01)
+
+
+async def receive_audio(ws, stream_out):
+    global robot_awake
+
+    while True:
+        message = await ws.recv()
+        data = json.loads(message)
+        event_type = data.get("type")
+
+        if event_type in ["response.output_audio.delta", "response.audio.delta"]:
+            if robot_awake:
+                start_qa_gestures()
+                set_face_state("talking")
+
+                audio_chunk = base64.b64decode(data["delta"])
+                stream_out.write(audio_chunk)
+
+        elif event_type in ["response.output_audio.done", "response.audio.done", "response.done"]:
+            set_face_state("idle")
+            threading.Thread(target=stop_qa_gestures, daemon=True).start()
+
+        elif event_type == "input_audio_buffer.speech_started":
+            print("ð¤ I hear you...")
+            threading.Thread(target=go_home, daemon=True).start()
+
+        elif event_type == "input_audio_buffer.speech_stopped":
+            print("ð§  Thinking...")
+            threading.Thread(
+                target=lambda: play_sequence([("thinking", 0.8)], speed=120, release=False),
+                daemon=True
+            ).start()
+
+        elif event_type == "error":
+            print("â Error:", data)
+
+
+async def realtime_qa():
+    p = pyaudio.PyAudio()
+
+    stream_in = p.open(
+        format=FORMAT,
+        channels=CHANNELS,
+        rate=INPUT_RATE,
+        input=True,
+        input_device_index=INPUT_DEVICE_INDEX,
+        frames_per_buffer=CHUNK,
+    )
+
+    stream_out = p.open(
+        format=FORMAT,
+        channels=CHANNELS,
+        rate=OUTPUT_RATE,
+        output=True,
+        output_device_index=OUTPUT_DEVICE_INDEX,
+        frames_per_buffer=CHUNK,
+    )
+
+    try:
+        async with websockets.connect(
+            URL,
+            additional_headers={
+                "Authorization": f"Bearer {API_KEY}"
+            }
+        ) as ws:
+
+            await ws.send(json.dumps({
+                "type": "session.update",
+                "session": {
+                    "type": "realtime",
+                    "instructions": "You are Charlie, an energetic, playful, cheerful robot teacher. Answer student questions about cell structure clearly and briefly.",
+                    "output_modalities": ["audio"],
+                    "audio": {
+                        "input": {
+                            "format": {
+                                "type": "audio/pcm",
+                                "rate": 24000
+                            },
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": 0.75,
+                                "prefix_padding_ms": 500,
+                                "silence_duration_ms": 1000
+                            },
+                            "transcription": {
+                                "model": "gpt-4o-mini-transcribe"
+                            }
+                        },
+                        "output": {
+                            "format": {
+                                "type": "audio/pcm",
+                                "rate": 24000
+                            },
+                            "voice": "echo"
+                        }
+                    }
+                }
+            }))
+
+            print("ð¤ Q&A started. Ask Charlie your questions.")
+
+            await asyncio.gather(
+                send_audio(ws, stream_in),
+                receive_audio(ws, stream_out)
+            )
+
+    finally:
+        set_face_state("idle")
+        try:
+            stop_qa_gestures()
+        except Exception:
+            pass
+
+        stream_in.stop_stream()
+        stream_in.close()
+        stream_out.stop_stream()
+        stream_out.close()
+        p.terminate()
+
+
+try:
+    set_face_state("idle")
+    face_process = subprocess.Popen(["python3", "face.py"])
+
+    time.sleep(1)
+
+    go_home()
+
+    teach_lesson()
+
+    print("Starting question and answer session...")
+    go_home()
+
+    asyncio.run(realtime_qa())
+
+finally:
+    set_face_state("idle")
+    go_home()
+    face_process.terminate()
+    shutdown_motors()
