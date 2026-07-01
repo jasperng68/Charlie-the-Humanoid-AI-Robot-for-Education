@@ -1,0 +1,11 @@
+import json
+
+POSE_FILE = "charlie_poses.json"
+
+with open(POSE_FILE, "r") as f:
+    poses = json.load(f)
+
+print(f"\nTotal poses: {len(poses)}\n")
+
+for i, name in enumerate(sorted(poses.keys()), 1):
+    print(f"{i:2d}. {name}")
