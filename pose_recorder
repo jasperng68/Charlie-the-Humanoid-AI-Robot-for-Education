@@ -1,0 +1,70 @@
+from dynamixel_sdk import *
+import json
+import os
+
+DEVICENAME = "/dev/ttyUSB0"
+BAUDRATE = 1000000
+PROTOCOL_VERSION = 1.0
+
+ADDR_PRESENT_POSITION = 36
+
+IDS = [33, 34, 35, 36, 37, 41, 42, 43, 44, 51, 52, 53, 54]
+
+POSE_FILE = "charlie_poses.json"
+
+portHandler = PortHandler(DEVICENAME)
+packetHandler = PacketHandler(PROTOCOL_VERSION)
+
+def read_position(dxl_id):
+    position, comm_result, error = packetHandler.read2ByteTxRx(
+        portHandler,
+        dxl_id,
+        ADDR_PRESENT_POSITION
+    )
+
+    if comm_result == COMM_SUCCESS:
+        return position
+    else:
+        return None
+
+def load_poses():
+    if os.path.exists(POSE_FILE):
+        with open(POSE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_poses(poses):
+    with open(POSE_FILE, "w") as f:
+        json.dump(poses, f, indent=4)
+
+if not portHandler.openPort():
+    print("Failed to open port")
+    quit()
+
+if not portHandler.setBaudRate(BAUDRATE):
+    print("Failed to set baudrate")
+    quit()
+
+pose_name = input("Enter pose name, for example home or wave_start: ")
+
+pose = {}
+
+print("Reading motor positions...")
+
+for dxl_id in IDS:
+    pos = read_position(dxl_id)
+
+    if pos is not None:
+        pose[str(dxl_id)] = pos
+        print(f"ID {dxl_id}: {pos}")
+    else:
+        print(f"ID {dxl_id}: failed")
+
+poses = load_poses()
+poses[pose_name] = pose
+save_poses(poses)
+
+portHandler.closePort()
+
+print(f"Saved pose: {pose_name}")
+print(f"File: {POSE_FILE}")
