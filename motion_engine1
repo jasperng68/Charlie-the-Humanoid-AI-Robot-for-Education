@@ -1,0 +1,152 @@
+from dynamixel_sdk import *
+import json
+import time
+import threading
+
+DEVICENAME = "/dev/ttyUSB0"
+BAUDRATE = 1000000
+PROTOCOL_VERSION = 1.0
+
+ADDR_TORQUE_ENABLE = 24
+ADDR_GOAL_POSITION = 30
+ADDR_MOVING_SPEED = 32
+
+POSE_FILE = "charlie_poses.json"
+
+MOTION_LOCK = threading.Lock()
+
+portHandler = PortHandler(DEVICENAME)
+packetHandler = PacketHandler(PROTOCOL_VERSION)
+
+_port_open = False
+
+
+def load_poses():
+    with open(POSE_FILE, "r") as f:
+        return json.load(f)
+
+
+def connect():
+    global _port_open
+
+    if _port_open:
+        return
+
+    if not portHandler.openPort():
+        print("Failed to open Dynamixel port")
+        return
+
+    if not portHandler.setBaudRate(BAUDRATE):
+        print("Failed to set Dynamixel baudrate")
+        return
+
+    _port_open = True
+
+
+def disconnect():
+    global _port_open
+
+    if _port_open:
+        portHandler.closePort()
+        _port_open = False
+
+
+def enable_torque(dxl_id):
+    packetHandler.write1ByteTxRx(
+        portHandler,
+        dxl_id,
+        ADDR_TORQUE_ENABLE,
+        1
+    )
+
+
+def disable_torque(dxl_id):
+    packetHandler.write1ByteTxRx(
+        portHandler,
+        dxl_id,
+        ADDR_TORQUE_ENABLE,
+        0
+    )
+
+
+def move_pose(pose, speed=120):
+    for dxl_id_str, position in pose.items():
+        dxl_id = int(dxl_id_str)
+
+        enable_torque(dxl_id)
+
+        packetHandler.write2ByteTxRx(
+            portHandler,
+            dxl_id,
+            ADDR_MOVING_SPEED,
+            speed
+        )
+
+        packetHandler.write2ByteTxRx(
+            portHandler,
+            dxl_id,
+            ADDR_GOAL_POSITION,
+            int(position)
+        )
+
+
+def play_sequence(sequence, speed=120, release=False):
+    """
+    Plays one or more saved poses.
+
+    IMPORTANT:
+    release=False keeps torque ON, so Charlie does not fall.
+    """
+    with MOTION_LOCK:
+        poses = load_poses()
+        connect()
+
+        used_ids = set()
+
+        for pose_name, wait_time in sequence:
+            if pose_name not in poses:
+                print(f"Pose not found: {pose_name}")
+                continue
+
+            print("Pose:", pose_name)
+            pose = poses[pose_name]
+
+            for dxl_id_str in pose.keys():
+                used_ids.add(int(dxl_id_str))
+
+            move_pose(pose, speed=speed)
+            time.sleep(wait_time)
+
+        if release:
+            for dxl_id in used_ids:
+                disable_torque(dxl_id)
+
+
+def go_home():
+    play_sequence([
+        ("home", 0.6)
+    ], speed=120, release=False)
+
+
+def wave_left():
+    play_sequence([
+        ("left_wave_start", 0.8),
+        ("left_wave_left", 0.35),
+        ("left_wave_right", 0.35),
+        ("left_wave_left", 0.35),
+        ("left_wave_right", 0.35),
+        ("left_wave_start", 0.4),
+        ("home", 0.7),
+    ], speed=120, release=False)
+
+
+def shutdown_motors():
+    """
+    Use this only at the very end if you want motors free.
+    For demo use, keeping torque ON is safer against falling.
+    """
+    disconnect()
+
+
+if __name__ == "__main__":
+    wave_left()
