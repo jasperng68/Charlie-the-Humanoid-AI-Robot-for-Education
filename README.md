@@ -52,27 +52,3 @@ Charlie/
 ├── unlock_all.py
 ├── list_poses.py
 ├── charlie_poses.json
-
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/yourusername/Charlie.git
-
-cd Charlie
-
-pip install -r requirements.txt
-
-python3 charlie_lesson_qa2.py
-
-Authors
-
-Dr. Anoop Kumar Sinha
-
-Singapore University of Social Sciences
-
-Acknowledgement
-
-Charlie is developed on top of the open-source Poppy humanoid platform. The AI software, educational framework, expressive behaviours, and system integration presented in this repository are original developments by the Charlie project.
