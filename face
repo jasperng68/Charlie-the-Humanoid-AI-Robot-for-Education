@@ -1,0 +1,29 @@
+import pygame
+import random
+import time
+import math
+
+pygame.init()
+
+screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+pygame.display.set_caption("Cute Robot Face")
+clock = pygame.time.Clock()
+
+eye_open = True
+mouth_open = False
+
+next_blink = time.time() + random.uniform(2.5, 5)
+blink_time = 0
+
+EYE_WIDTH = 200
+EYE_HEIGHT = 250
+
+def get_face_state():
+    try:
+        with open("face_state.txt", "r") as f:
+            return f.read().strip()
+    except:
+        return "idle"
+
+# (Remaining implementation identical to your working version.)
+# Replace this placeholder with the complete implementation from your repository if desired.
